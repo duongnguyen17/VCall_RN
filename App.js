@@ -58,7 +58,10 @@ const App = () => {
       setCaller(data.caller);
       setCallerSignal(data.signal);
     });
-
+    socket.on('cancel', () => {
+      setReceivingCall(false);
+      setIsCalling(false)
+    });
     socket.on('callAccepted', async data => {
       console.log(`callAccepted`, data);
       setCallAccepted(true);
@@ -183,6 +186,20 @@ const App = () => {
       console.log('answer error:', error.message);
     }
   };
+  //từ chối cuộc gọi
+  const rejectCall = () => {
+    setReceivingCall(false);
+    socket.emit('cancel', {
+      userToCall: caller.from,
+    });
+  };
+  //huỷ cuộc gọi
+  const cancel = () => {
+    setIsCalling(false);
+    socket.emit('cancel', {
+      userToCall: idToCall,
+    });
+  };
   const createOffer = async () => {
     try {
       const desc = await peerConnect.createOffer();
@@ -198,7 +215,20 @@ const App = () => {
     // setReceivingCall(false);
     peerConnect.addIceCandidate(new RTCIceCandidate(candidate));
   };
-  const leaveCall = async () => {};
+  //rời khỏi cuộc gọi
+  const leaveCall = () => {
+    // peerConnect.close();
+    // peerConnect.removeStream();
+    // setCallAccepted(false);
+    // setCallEnd(false);
+    // setReceivingCall(false);
+    // setIsCalling(false);
+    // setIsFront(true);
+    // setMyStream(null);
+    // setPartnerStream(null);
+    // setMyName('');
+    // setIdToCall('');
+  };
   // console.log(partnerStream._tracks);
   // console.log(myStream._tracks);
   if (receivingCall) {
@@ -217,9 +247,7 @@ const App = () => {
               icon="phone"
               size={50}
               color="#ff3300"
-              onPress={() => {
-                //từ chối
-              }}
+              onPress={rejectCall}
             />
           </View>
         </Text>
@@ -283,9 +311,7 @@ const App = () => {
                 icon="phone"
                 size={50}
                 color="#ff3300"
-                onPress={() => {
-                  //huỷ cuộc gọi
-                }}
+                onPress={cancel}
               />
             )}
           </View>
@@ -343,11 +369,15 @@ const App = () => {
               icon="phone"
               size={50}
               color="#ff3300"
+              onPress={leaveCall}
+            />
+            <IconButton
+              icon="camera"
+              size={30}
               onPress={() => {
-                //rời
+                setIsFront(!isFront);
               }}
             />
-            <IconButton icon="camera" size={30} onPress={() => {}} />
           </View>
         )}
       </View>
