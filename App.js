@@ -1,55 +1,123 @@
-import React, {useState, useEffect, useRef} from 'react';
+import React, {useState, useEffect, useRef, useCallback} from 'react';
 import {
   SafeAreaView,
   StyleSheet,
   Text,
   View,
   Button,
+  StatusBar,
   Dimensions,
+  PermissionsAndroid,
 } from 'react-native';
-import {TextInput} from 'react-native-paper';
+import {TextInput, IconButton} from 'react-native-paper';
 import Clipboard from '@react-native-community/clipboard';
 import {io} from 'socket.io-client';
-import Peer from 'react-native-peerjs';
+import {KeyboardAwareScrollView} from 'react-native-keyboard-aware-scrollview';
 import {
+  RTCPeerConnection,
   RTCView,
+  RTCIceCandidate,
   MediaStream,
   MediaStreamTrack,
   mediaDevices,
+  RTCSessionDescription,
 } from 'react-native-webrtc';
-const {width, height} = Dimensions.get('screen');
-const socket = io('https://video-call-0606.herokuapp.com/');
+const {height, width} = Dimensions.get('screen');
+
 const App = () => {
+  const socket = useRef(io('https://video-call-0606.herokuapp.com/')).current;
+  const peerConnect = useRef(
+    new RTCPeerConnection({
+      iceServers: [{urls: 'stun:stun.l.google.com:19302'}],
+    }),
+  ).current;
   const [myName, setMyName] = useState('');
   const [myId, setMyId] = useState('');
   const [idToCall, setIdToCall] = useState('');
-  const [stream, setStream] = useState();
+  const [myStream, setMyStream] = useState(null);
+  const [partnerStream, setPartnerStream] = useState(null);
   const [callAccepted, setCallAccepted] = useState(false);
   const [callEnd, setCallEnd] = useState(false);
   const [receivingCall, setReceivingCall] = useState(false);
+  const [isCalling, setIsCalling] = useState(false);
   const [caller, setCaller] = useState();
   const [callerSignal, setCallerSignal] = useState();
-  const myVideo = useRef();
+  const [isFront, setIsFront] = useState(true);
+  const inputId = useRef();
 
   useEffect(() => {
-    // mediaDevices.getUserMedia({video: true, audio: true}).then(stream => {
-    //   setStream(stream);
-    //   myVideo.current.srcObject = stream;
-    // });
-    getStream();
     socket.on('me', id => {
+      // console.log('object');
       setMyId(id);
     });
+
+    //khi có người gọi đến
     socket.on('callUser', data => {
+      console.log(`callUser`, data);
       setReceivingCall(true);
       setCaller(data.caller);
       setCallerSignal(data.signal);
     });
+
+    socket.on('callAccepted', async data => {
+      console.log(`callAccepted`, data);
+      setCallAccepted(true);
+      await peerConnect.setRemoteDescription(new RTCSessionDescription(data));
+    });
+    socket.on('candidate', data => {
+      console.log(`candidate`, data.candidate);
+      handleCandidate(data.candidate);
+    });
+    peerConnect.onicecandidate = e => {
+      // send the candidates to the remote peer
+      // see addCandidate below to be triggered on the remote peer
+      if (e.candidate) {
+        console.log(`send candidate`, e.candidate);
+        socket.emit('candidate', {
+          candidate: e.candidate,
+        });
+      }
+    };
+
+    // registerPeerEvents();
+
+    peerConnect.onaddstream = e => {
+      console.log('On Add partner Stream: ', e.stream);
+      // this.remoteVideoref.current.srcObject = e.streams[0]
+      setPartnerStream(e.stream);
+    };
+    peerConnect.oniceconnectionstatechange = e => {
+      console.log('oniceconnectionstatechange', e);
+    };
+    getStream();
   }, []);
+
+  // useEffect(() => {
+  //   console.log(`peerConnect.connectionState`, peerConnect.connectionState);
+  //   if (peerConnect.connectionState === 'connecting') {
+  //     registerPeerEvents();
+  //   }
+  // }, [peerConnect.connectionState]);
+
+  // const registerPeerEvents = () => {
+  //   peerConnect.onaddstream = event => {
+  //     console.log('On Add partner Stream: ', event);
+  //     setPartnerStream(event.stream);
+  //   };
+
+  //   // Setup ice handling
+  //   peerConnect.onicecandidate = event => {
+  //     if (event.candidate) {
+  //       socket.emit('candidate', {
+  //         userToCall: idToCall,
+  //         candidate: event.candidate,
+  //       });
+  //     }
+  //   };
+  // };
 
   const getStream = async () => {
     try {
-      let isFront = true;
       const sourceInfos = await mediaDevices.enumerateDevices();
       let videoSourceId;
       for (let i = 0; i < sourceInfos.length; i++) {
@@ -71,71 +139,220 @@ const App = () => {
           deviceId: videoSourceId,
         },
       });
-      console.log(`stream`, stream);
-      setStream(stream);
-      myVideo.current.srcObject = stream;
+      setMyStream(stream);
+      peerConnect.addStream(stream);
+
+      // RTC của react native chưa có addTracks nên vẫn phải dùng addStream
+      // stream.getTracks().forEach(function(track) {
+      //   peerConnect.addTrack(track, stream);
+      // });
     } catch (error) {
       console.log(`error 60 App.js: `, error.message);
     }
   };
-  const makeCall = () => {};
-  return (
-    <SafeAreaView style={styles.container}>
-      <View
-        style={{
-          flexDirection: 'row',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-        }}>
-        <Text>My ID: {myId}</Text>
-        <Button
-          title="copy"
-          onPress={() => {
-            Clipboard.setString(myId);
-          }}
-        />
-      </View>
-      <View style={styles.videoContainer}>
-        <View style={styles.video}>
-          {stream && (
-            <RTCView
-              streamURL={stream.toURL()}
-              style={{width: width, height: height / 3}}
+
+  const makeCall = async () => {
+    try {
+      setIsCalling(true);
+      const desc = await createOffer();
+      socket.emit('callUser', {
+        userToCall: idToCall,
+        signalData: desc,
+        caller: {from: myId, name: myName},
+      });
+    } catch (error) {
+      console.log(`makeCall error:`, error.message);
+    }
+  };
+  const answer = async () => {
+    try {
+      await peerConnect.setRemoteDescription(
+        new RTCSessionDescription(callerSignal),
+      );
+      const desc = await peerConnect.createAnswer();
+      console.log(`desc answer: `, desc);
+      await peerConnect.setLocalDescription(desc);
+      setReceivingCall(false);
+      setCallAccepted(true);
+
+      socket.emit('acceptCall', {
+        to: caller.from,
+        signalData: desc,
+      });
+    } catch (error) {
+      console.log('answer error:', error.message);
+    }
+  };
+  const createOffer = async () => {
+    try {
+      const desc = await peerConnect.createOffer();
+      // console.log(`desc`, desc);
+      await peerConnect.setLocalDescription(desc);
+      // Send peerConnect.localDescription to peer
+      return desc;
+    } catch (error) {
+      console.log(`createOffer error:`, error);
+    }
+  };
+  const handleCandidate = candidate => {
+    // setReceivingCall(false);
+    peerConnect.addIceCandidate(new RTCIceCandidate(candidate));
+  };
+  const leaveCall = async () => {};
+  // console.log(partnerStream._tracks);
+  // console.log(myStream._tracks);
+  if (receivingCall) {
+    return (
+      <SafeAreaView style={{flex: 1}}>
+        <Text>
+          <Text>{caller?.name} is calling...</Text>
+          <View style={{flexDirection: 'row'}}>
+            <IconButton
+              icon="phone"
+              size={50}
+              color="#009900"
+              onPress={answer}
             />
-          )}
-        </View>
-        <View style={styles.video}>
-          <Text>partnerVideo</Text>
-        </View>
-      </View>
-      <View style={styles.handleCall}>
-        <TextInput label="name" value={myName} onChangeText={setMyName} />
-        <TextInput
-          label="id to call"
-          value={idToCall}
-          onChangeText={setIdToCall}
-        />
-        <View style={styles.buttonCallContainer}>
-          {callAccepted && !callEnd ? (
-            <Button title="leave" onPress={leaveCall} />
-          ) : (
-            <Button
-              title="call"
+            <IconButton
+              icon="phone"
+              size={50}
+              color="#ff3300"
               onPress={() => {
-                callUser(idToCall);
+                //từ chối
               }}
             />
-          )}
-        </View>
+          </View>
+        </Text>
+        <IconButton />
+      </SafeAreaView>
+    );
+  }
+  return (
+    <SafeAreaView style={{flex: 1}}>
+      {/* <KeyboardAwareScrollView
+        contentContainerStyle={styles.container}
+        keyboardShouldPersistTaps="handled"> */}
+      {/* <View style={{width: width, height: height - StatusBar.currentHeight}}> */}
+      <View style={styles.videoContainer}>
+        {isCalling || callAccepted ? (
+          <View style={{flex: 1}}>
+            <View
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+              }}>
+              <Text>My ID: {myId}</Text>
+              <Button
+                title="copy"
+                onPress={() => {
+                  Clipboard.setString(myId);
+                }}
+              />
+            </View>
+            <View style={{flex: 1}}>
+              <View style={styles.partnerVideo}>
+                {!!partnerStream && (
+                  <RTCView
+                    streamURL={partnerStream.toURL()}
+                    style={{
+                      width: '100%',
+                      height: '100%',
+                      backgroundColor: 'gray',
+                    }}
+                  />
+                )}
+              </View>
+              <View
+                style={{
+                  width: '30%',
+                  height: '30%',
+                  position: 'absolute',
+                  right: 0,
+                  top: 0,
+                }}>
+                {!!myStream && (
+                  <RTCView streamURL={myStream.toURL()} style={{flex: 1}} />
+                )}
+              </View>
+            </View>
+
+            {!callAccepted && (
+              <IconButton
+                style={{alignSelf: 'center'}}
+                icon="phone"
+                size={50}
+                color="#ff3300"
+                onPress={() => {
+                  //huỷ cuộc gọi
+                }}
+              />
+            )}
+          </View>
+        ) : (
+          <>
+            <View
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+              }}>
+              <Text>My ID: {myId}</Text>
+              <Button
+                title="copy"
+                onPress={() => {
+                  Clipboard.setString(myId);
+                }}
+              />
+            </View>
+            <TextInput
+              label="name"
+              value={myName}
+              onChangeText={setMyName}
+              onSubmitEditing={() => {
+                inputId.current.focus();
+              }}
+            />
+            <TextInput
+              ref={inputId}
+              label="id to call"
+              value={idToCall}
+              onChangeText={setIdToCall}
+            />
+            <IconButton
+              style={{alignSelf: 'center'}}
+              icon="phone"
+              size={50}
+              color="#009900"
+              onPress={() => {
+                makeCall();
+              }}
+            />
+          </>
+        )}
       </View>
-      <View style={styles.partner}>
-        {receivingCall && !callAccepted && (
-          <View>
-            <Text>{partner.name} is calling...</Text>
-            <Button title="Answer" onPress={answer} />
+      <View style={styles.handleCall}>
+        {callAccepted && !callEnd && (
+          <View
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'space-around',
+            }}>
+            <IconButton
+              icon="phone"
+              size={50}
+              color="#ff3300"
+              onPress={() => {
+                //rời
+              }}
+            />
+            <IconButton icon="camera" size={30} onPress={() => {}} />
           </View>
         )}
       </View>
+      {/* </View> */}
+      {/* </KeyboardAwareScrollView> */}
     </SafeAreaView>
   );
 };
@@ -143,14 +360,18 @@ const App = () => {
 export default App;
 const styles = StyleSheet.create({
   container: {
-    flex: 1,
+    flexGrow: 1,
   },
   videoContainer: {
     flex: 1,
   },
-  video: {
+  partnerVideo: {
     flex: 1,
     borderWidth: 0.5,
     borderColor: 'green',
+    // backgroundColor: 'gray',
   },
+  myVideo: {},
+  handleCall: {},
+  partner: {},
 });
