@@ -12,7 +12,7 @@ import {
 import {TextInput, IconButton} from 'react-native-paper';
 import Clipboard from '@react-native-community/clipboard';
 import {io} from 'socket.io-client';
-import {KeyboardAwareScrollView} from 'react-native-keyboard-aware-scrollview';
+// import RecordScreen from 'react-native-record-screen';
 import {
   RTCPeerConnection,
   RTCView,
@@ -60,16 +60,12 @@ const App = () => {
     });
     socket.on('cancel', () => {
       setReceivingCall(false);
-      setIsCalling(false)
+      setIsCalling(false);
     });
     socket.on('callAccepted', async data => {
       console.log(`callAccepted`, data);
       setCallAccepted(true);
       await peerConnect.setRemoteDescription(new RTCSessionDescription(data));
-    });
-    socket.on('candidate', data => {
-      console.log(`candidate`, data.candidate);
-      handleCandidate(data.candidate);
     });
     peerConnect.onicecandidate = e => {
       // send the candidates to the remote peer
@@ -81,6 +77,10 @@ const App = () => {
         });
       }
     };
+    socket.on('candidate', data => {
+      console.log(`candidate`, data.candidate);
+      handleCandidate(data.candidate);
+    });
 
     // registerPeerEvents();
 
@@ -89,9 +89,9 @@ const App = () => {
       // this.remoteVideoref.current.srcObject = e.streams[0]
       setPartnerStream(e.stream);
     };
-    peerConnect.oniceconnectionstatechange = e => {
-      console.log('oniceconnectionstatechange', e);
-    };
+    // peerConnect.oniceconnectionstatechange = e => {
+    //   console.log('oniceconnectionstatechange', e);
+    // };
     getStream();
   }, []);
 
@@ -132,18 +132,29 @@ const App = () => {
           videoSourceId = sourceInfo.deviceId;
         }
       }
-      const stream = await mediaDevices.getUserMedia({
+      // const stream = await mediaDevices.getUserMedia({
+      //   audio: true,
+      //   video: {
+      //     width: 640,
+      //     height: 480,
+      //     frameRate: 30,
+      //     facingMode: isFront ? 'user' : 'environment',
+      //     deviceId: videoSourceId,
+      //   },
+      // });
+      const stream2 = await mediaDevices.getDisplayMedia({
         audio: true,
         video: {
-          width: 640,
-          height: 480,
+          width: width,
+          height: height,
           frameRate: 30,
-          facingMode: isFront ? 'user' : 'environment',
+          // facingMode: isFront ? 'user' : 'environment',
           deviceId: videoSourceId,
         },
       });
-      setMyStream(stream);
-      peerConnect.addStream(stream);
+      console.log(`stream2`, stream2);
+      setMyStream(stream2);
+      peerConnect.addStream(stream2);
 
       // RTC của react native chưa có addTracks nên vẫn phải dùng addStream
       // stream.getTracks().forEach(function(track) {
@@ -153,7 +164,22 @@ const App = () => {
       console.log(`error 60 App.js: `, error.message);
     }
   };
-
+  //quay video màn hình
+  const recordScreen = async () => {
+    // recording start
+    // RecordScreen.startRecording().catch(error => console.error(error));
+    // recording stop
+    // const res = await RecordScreen.stopRecording().catch(error =>
+    //   console.warn(error),
+    // );
+    // if (res) {
+    //   const url = res.result.outputURL;
+    // }
+    try {
+    } catch (error) {
+      console.log(`record screen error: `, error);
+    }
+  };
   const makeCall = async () => {
     try {
       setIsCalling(true);
@@ -183,7 +209,7 @@ const App = () => {
         signalData: desc,
       });
     } catch (error) {
-      console.log('answer error:', error.message);
+      console.log('answer error:', error);
     }
   };
   //từ chối cuộc gọi
@@ -211,9 +237,13 @@ const App = () => {
       console.log(`createOffer error:`, error);
     }
   };
-  const handleCandidate = candidate => {
-    // setReceivingCall(false);
-    peerConnect.addIceCandidate(new RTCIceCandidate(candidate));
+  const handleCandidate = async candidate => {
+    try {
+      // setReceivingCall(false);
+      peerConnect.addIceCandidate(new RTCIceCandidate(candidate));
+    } catch (error) {
+      console.log(`handleIceCandidate error: `, error);
+    }
   };
   //rời khỏi cuộc gọi
   const leaveCall = () => {
@@ -229,8 +259,8 @@ const App = () => {
     // setMyName('');
     // setIdToCall('');
   };
-  // console.log(partnerStream._tracks);
-  // console.log(myStream._tracks);
+  console.log(partnerStream?._tracks);
+  console.log(myStream?._tracks);
   if (receivingCall) {
     return (
       <SafeAreaView style={{flex: 1}}>
@@ -371,13 +401,7 @@ const App = () => {
               color="#ff3300"
               onPress={leaveCall}
             />
-            <IconButton
-              icon="camera"
-              size={30}
-              onPress={() => {
-                setIsFront(!isFront);
-              }}
-            />
+            <IconButton icon="camera" size={30} onPress={() => {}} />
           </View>
         )}
       </View>
